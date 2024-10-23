@@ -363,3 +363,11 @@ export enum ImmichWorker {
   API = 'api',
   MICROSERVICES = 'microservices',
 }
+
+export enum ImmichTelemetries {
+  HOST = 'host',
+  API = 'api',
+  IO = 'io',
+  REPO = 'repo',
+  JOB = 'job',
+}

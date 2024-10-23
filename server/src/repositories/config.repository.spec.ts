@@ -12,11 +12,8 @@ const resetEnv = () => {
     'IMMICH_TRUSTED_PROXIES',
     'IMMICH_API_METRICS_PORT',
     'IMMICH_MICROSERVICES_METRICS_PORT',
-    'IMMICH_METRICS',
-    'IMMICH_API_METRICS',
-    'IMMICH_HOST_METRICS',
-    'IMMICH_IO_METRICS',
-    'IMMICH_JOB_METRICS',
+    'IMMICH_TELEMETRY_INCLUDE',
+    'IMMICH_TELEMETRY_EXCLUDE',
 
     'DB_URL',
     'DB_HOSTNAME',
@@ -229,7 +226,7 @@ describe('getEnv', () => {
     });
 
     it('should run with telemetry enabled', () => {
-      process.env.IMMICH_METRICS = 'true';
+      process.env.IMMICH_TELEMETRY_INCLUDE = 'all';
       const { telemetry } = getEnv();
       expect(telemetry).toMatchObject({
         enabled: true,
@@ -241,8 +238,8 @@ describe('getEnv', () => {
     });
 
     it('should run with telemetry enabled and jobs disabled', () => {
-      process.env.IMMICH_METRICS = 'true';
-      process.env.IMMICH_JOB_METRICS = 'false';
+      process.env.IMMICH_TELEMETRY_INCLUDE = 'all';
+      process.env.IMMICH_TELEMETRY_EXCLUDE = 'job';
       const { telemetry } = getEnv();
       expect(telemetry).toMatchObject({
         enabled: true,
