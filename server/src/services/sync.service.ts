@@ -1,16 +1,95 @@
+import { ForbiddenException } from '@nestjs/common';
 import { DateTime } from 'luxon';
+import { Writable } from 'node:stream';
 import { AUDIT_LOG_MAX_DURATION } from 'src/constants';
+import { mapAlbum } from 'src/dtos/album.dto';
 import { AssetResponseDto, mapAsset } from 'src/dtos/asset-response.dto';
 import { AuthDto } from 'src/dtos/auth.dto';
-import { AssetDeltaSyncDto, AssetDeltaSyncResponseDto, AssetFullSyncDto } from 'src/dtos/sync.dto';
-import { DatabaseAction, EntityType, Permission } from 'src/enum';
+import { AssetDeltaSyncDto, AssetDeltaSyncResponseDto, AssetFullSyncDto, SyncStreamDto } from 'src/dtos/sync.dto';
+import { DatabaseAction, EntityType, Permission, SyncType } from 'src/enum';
+import { SyncOptions } from 'src/interfaces/sync.interface';
 import { BaseService } from 'src/services/base.service';
 import { getMyPartnerIds } from 'src/utils/asset.util';
+import { Paginated, usePagination } from 'src/utils/pagination';
 import { setIsEqual } from 'src/utils/set';
 
 const FULL_SYNC = { needsFullSync: true, deleted: [], upserted: [] };
+const SYNC_PAGE_SIZE = 5000;
+
+const asJsonLine = (item: unknown) => JSON.stringify(item) + '\n';
+
+type StreamItemOptions<T, R> = {
+  stream: Writable;
+  type: SyncType;
+  userId: string;
+  lastAck?: string | null;
+  load: (options: SyncOptions) => Paginated<T>;
+  map: (item: T) => R;
+};
+
+const writeToStream = async <T, R = any>({ stream, type, userId, lastAck, load, map }: StreamItemOptions<T, R>) => {
+  const pagination = usePagination(SYNC_PAGE_SIZE, (options) => load({ ...options, userId, lastAck }));
+  for await (const items of pagination) {
+    for (const item of items) {
+      stream.write(asJsonLine({ type, data: map(item) }));
+    }
+  }
+};
 
 export class SyncService extends BaseService {
+  async acknowledge(auth: AuthDto, dto: any) {
+    const { id: sessionId } = this.assertSession(auth);
+    await this.syncRepository.upsert({ ...dto, sessionId });
+  }
+
+  async stream(auth: AuthDto, stream: Writable, dto: SyncStreamDto) {
+    const { id: sessionId } = this.assertSession(auth);
+    const state = await this.syncRepository.get(sessionId);
+
+    for (const type of dto.types) {
+      const common = { stream, type, userId: auth.user.id };
+
+      switch (type) {
+        case SyncType.ASSET: {
+          await writeToStream({
+            ...common,
+            lastAck: state?.assets,
+            load: (options) => this.syncRepository.getAssets(options),
+            map: (item) => mapAsset(item, { auth, stripMetadata: false }),
+          });
+          break;
+        }
+
+        case SyncType.ALBUM: {
+          await writeToStream({
+            ...common,
+            lastAck: state?.albums,
+            load: (options) => this.syncRepository.getAlbums(options),
+            map: (item) => mapAlbum(item, false, auth),
+          });
+          break;
+        }
+
+        case SyncType.ALBUM_ASSET: {
+          await writeToStream({
+            ...common,
+            lastAck: state?.albumAssets,
+            load: (options) => this.syncRepository.getAlbumAssets(options),
+            map: (item) => item,
+          });
+          break;
+        }
+
+        default: {
+          this.logger.warn(`Unsupported sync type: ${type}`);
+          break;
+        }
+      }
+    }
+
+    stream.end();
+  }
+
   async getFullSync(auth: AuthDto, dto: AssetFullSyncDto): Promise<AssetResponseDto[]> {
     // mobile implementation is faster if this is a single id
     const userId = dto.userId || auth.user.id;
@@ -70,5 +149,13 @@ export class SyncService extends BaseService {
       deleted,
     };
     return result;
+  }
+
+  private assertSession(auth: AuthDto) {
+    if (!auth.session?.id) {
+      throw new ForbiddenException('This endpoint requires session-based authentication');
+    }
+
+    return auth.session;
   }
 }
